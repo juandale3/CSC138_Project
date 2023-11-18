@@ -1,4 +1,3 @@
-# 138 Project client.py
 import socket
 import sys
 
@@ -43,11 +42,11 @@ def main():
     port = int(sys.argv[2])
 
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        client_socket.connect((hostname, port))
-    except Exception as e:
-        print(f"Error connecting to the server: {e}")
-        sys.exit(1)
+    #try:
+    client_socket.connect((hostname, port))
+    #except Exception as e:
+     #   print(f"Error connecting to the server: {e}")
+      #  sys.exit(1)
 
     print("Connected to the server.")
 
