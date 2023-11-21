@@ -33,11 +33,14 @@ def handle_broadcast():
     while True:
         message = broadcast_queue.get()
         with lock:
-            for username in REGISTERED_CLIENTS:
-                client = next((client for client in client_data.values() if client.request_username == username), None)
-                if client and client.socket:
+            sent_clients = set()
+
+            for thread, client in client_data.items():
+                if client.socket and client not in sent_clients:
                     client.socket.sendall(message.encode('utf-8'))
-        broadcast_queue.task_done()  # Mark the task as done after processing
+                    sent_clients.add(client)
+
+            broadcast_queue.task_done()
 
 
 # Start the broadcasting thread
