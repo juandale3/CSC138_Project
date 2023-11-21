@@ -1,16 +1,72 @@
 import socket
 import sys
 import threading
+import queue  # Add this import statement
 
 # Constants
 MAX_CLIENTS = 10
 REGISTERED_CLIENTS = set()
 lock = threading.Lock()
+client_data = {}
+
+
+def get_or_create_client(thread):
+    with lock:
+        if thread not in client_data:
+            client_data[thread] = ClientWrapper(None)
+        return client_data[thread]
+
+
+# Queue to hold messages for broadcasting
+broadcast_queue = queue.Queue()
+
+
+# Client wrapper to store separate usernames
+class ClientWrapper:
+    def __init__(self, socket, username=None):
+        self.socket = socket
+        self.request_username = username
+
+
+# Function to handle broadcasting in a separate thread
+def handle_broadcast():
+    while True:
+        message = broadcast_queue.get()
+        with lock:
+            for username in REGISTERED_CLIENTS:
+                client = next((client for client in client_data.values() if client.request_username == username), None)
+                if client and client.socket:
+                    client.socket.sendall(message.encode('utf-8'))
+        broadcast_queue.task_done()  # Mark the task as done after processing
+
+
+# Start the broadcasting thread
+broadcast_thread = threading.Thread(target=handle_broadcast)
+broadcast_thread.start()
+
+
+# Function to send a message to all clients
+def send_message_to_all_clients(message):
+    broadcast_queue.put(message)
+
+
+# Function to send a message to a specific client
+def send_message_to_client(target_username, message, broadcast=False):
+    with lock:
+        for thread, client in client_data.items():
+            if client.request_username == target_username or broadcast:
+                if client.socket:
+                    client.socket.sendall(message.encode('utf-8'))
+
 
 # Function to handle a client in a separate thread
 def handle_client(client_socket, client_address):
     try:
         print(f"Connection from {client_address}")
+
+        current_thread = threading.current_thread()
+        client = ClientWrapper(client_socket)  # Create a new ClientWrapper for each thread
+        client_data[current_thread] = client
 
         while True:
             data = client_socket.recv(1024)
@@ -21,10 +77,11 @@ def handle_client(client_socket, client_address):
             print(f"Received from {client_address}: {request}")
 
             if request.startswith("JOIN"):
-                requested_username = request.split()[1]
+                username_attempt = request.split()[1]
                 with lock:
-                    if requested_username not in REGISTERED_CLIENTS:
-                        REGISTERED_CLIENTS.add(requested_username)
+                    if username_attempt not in REGISTERED_CLIENTS:
+                        REGISTERED_CLIENTS.add(username_attempt)
+                        client.request_username = username_attempt
                         response = "Joined successfully!"
                     else:
                         response = "Username already taken. Please choose another."
@@ -34,20 +91,30 @@ def handle_client(client_socket, client_address):
                     response = "\n".join(REGISTERED_CLIENTS)
 
             elif request.startswith("MESG"):
-                parts = request.split()
-                target_username = parts[1]
-                if target_username in REGISTERED_CLIENTS:
-                    message = ' '.join(parts[2:])
-                    response = f"Message from {requested_username}: {message}"
-                    client_socket.sendall(response.encode('utf-8'))
-                    continue  # Skip broadcasting
-                else:
-                    response = f"Unknown recipient: {target_username}"
+                try:
+                    sender_username = client.request_username
+                    parts = request.split()
+                    target_username = parts[1]
+                    if target_username in REGISTERED_CLIENTS:
+                        message = ' '.join(parts[2:])
+                        response = f"Message from {sender_username}: {message}"
+                        send_message_to_client(target_username, response, False)
+                        continue  # Skip broadcasting
+                    else:
+                        response = f"Unknown recipient: {target_username}"
+                except Exception as e:
+                    print(f"Unknown Format")
+
 
             elif request.startswith("BCST"):
-                message = ' '.join(request.split()[1:])
-                with lock:
-                    response = f"Broadcast from {requested_username}: {message}"
+                try:
+                    message = ' '.join(request.split()[1:])
+                    with lock:
+                        response = f"Broadcast from {client.request_username}: {message}"
+                        broadcast_queue.put(response)
+                except Exception as e:
+                    print(f"Unknown Format")
+
 
             elif request == "QUIT":
                 with lock:
@@ -59,18 +126,24 @@ def handle_client(client_socket, client_address):
 
             client_socket.sendall(response.encode('utf-8'))
 
-        with lock:
-            REGISTERED_CLIENTS.remove(requested_username)
-
     except Exception as e:
         print(f"Error handling client {client_address}: {e}")
 
+
     finally:
+        with lock:
+            if client.request_username in REGISTERED_CLIENTS:
+                REGISTERED_CLIENTS.remove(client.request_username)
+            del client_data[threading.current_thread()]  # Remove client data
+
         print(f"Connection closed from {client_address}")
+
         client_socket.close()
+
 
 # Main server function
 def main():
+    global client_address
     if len(sys.argv) != 2:
         print("Usage: python3 server.py <port>")
         sys.exit(1)
@@ -85,6 +158,10 @@ def main():
     try:
         while True:
             client_socket, client_address = server_socket.accept()
+
+            client = ClientWrapper(client_socket)
+            client_data[threading.Thread(target=handle_client, args=(client_socket, client_address))] = client
+
             client_handler = threading.Thread(target=handle_client, args=(client_socket, client_address))
             client_handler.start()
 
@@ -92,7 +169,9 @@ def main():
         print(f"Error in the main server loop: {e}")
 
     finally:
+        print(f"Connection closed from {client_address}")
         server_socket.close()
+
 
 # Entry point
 if __name__ == "__main__":
