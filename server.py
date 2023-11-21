@@ -1,92 +1,99 @@
-# 138 Project server.py
 import socket
+import sys
 import threading
 
 # Constants
 MAX_CLIENTS = 10
-
-# Data structures to store registered clients
-registered_clients = {}
+REGISTERED_CLIENTS = set()
 lock = threading.Lock()
 
-# Function to handle client requests
+# Function to handle a client in a separate thread
 def handle_client(client_socket, client_address):
-    print(f"Connection from {client_address}")
+    try:
+        print(f"Connection from {client_address}")
 
-    while True:
-        try:
-            data = client_socket.recv(1024).decode('utf-8')
+        while True:
+            data = client_socket.recv(1024)
             if not data:
                 break
-            
-            # Split the command and username
-            command, *args = data.split()
 
-            if command == "JOIN":
-                handle_join(client_socket, args[0])
-            elif command == "LIST":
-                handle_list(client_socket)
+            request = data.decode('utf-8')
+            print(f"Received from {client_address}: {request}")
+
+            if request.startswith("JOIN"):
+                requested_username = request.split()[1]
+                with lock:
+                    if requested_username not in REGISTERED_CLIENTS:
+                        REGISTERED_CLIENTS.add(requested_username)
+                        response = "Joined successfully!"
+                    else:
+                        response = "Username already taken. Please choose another."
+
+            elif request == "LIST":
+                with lock:
+                    response = "\n".join(REGISTERED_CLIENTS)
+
+            elif request.startswith("MESG"):
+                parts = request.split()
+                target_username = parts[1]
+                if target_username in REGISTERED_CLIENTS:
+                    message = ' '.join(parts[2:])
+                    response = f"Message from {requested_username}: {message}"
+                    client_socket.sendall(response.encode('utf-8'))
+                    continue  # Skip broadcasting
+                else:
+                    response = f"Unknown recipient: {target_username}"
+
+            elif request.startswith("BCST"):
+                message = ' '.join(request.split()[1:])
+                with lock:
+                    response = f"Broadcast from {requested_username}: {message}"
+
+            elif request == "QUIT":
+                with lock:
+                    response = "Goodbye!"
+                    break
+
             else:
-                print(f"Unknown command from {client_address}: {command}")
+                response = "Unknown message."
 
-        except Exception as e:
-            print(f"Error handling {client_address}: {e}")
-            break
+            client_socket.sendall(response.encode('utf-8'))
 
-    # Remove client from registered clients
-    with lock:
-        if client_socket.fileno() in registered_clients:
-            del registered_clients[client_socket.fileno()]
+        with lock:
+            REGISTERED_CLIENTS.remove(requested_username)
 
-    print(f"Connection from {client_address} closed")
-    client_socket.close()
+    except Exception as e:
+        print(f"Error handling client {client_address}: {e}")
 
-# Function to handle JOIN command
-def handle_join(client_socket, username):
-    with lock:
-        if len(registered_clients) >= MAX_CLIENTS:
-            print(f"Too many users. {username} cannot join.")
-            client_socket.send("Too Many Users\n".encode('utf-8'))
-        elif client_socket.fileno() in registered_clients:
-            print(f"{username} is already registered.")
-            client_socket.send(f"{username} is already registered.\n".encode('utf-8'))
-        else:
-            registered_clients[client_socket.fileno()] = username
-            print(f"{username} joined the server.")
-            client_socket.send(f"Joined as {username}\n".encode('utf-8'))
-
-# Function to handle LIST command
-def handle_list(client_socket):
-    with lock:
-        if client_socket.fileno() in registered_clients:
-            client_socket.send("\n".join(registered_clients.values()).encode('utf-8'))
-        else:
-            print("Unauthorized LIST request from non-registered client.")
+    finally:
+        print(f"Connection closed from {client_address}")
+        client_socket.close()
 
 # Main server function
-def start_server(port):
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('0.0.0.0', port))
-    server_socket.listen(1)
-
-    print(f"Server listening on port {port}")
-
-    while True:
-        client_socket, client_address = server_socket.accept()
-        print("accepted connection")
-        #client_handler = threading.Thread(target=handle_client, args=(client_socket, client_address))
-        data = client_socket.recv(1024)
-        if data:
-            print("reveived message:", {data.decode()})
-        client_socket.close()
-        #client_handler.start()
-
-# Entry point
-if __name__ == "__main__":
-    import sys
+def main():
     if len(sys.argv) != 2:
         print("Usage: python3 server.py <port>")
         sys.exit(1)
-
     port = int(sys.argv[1])
-    start_server(port)
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind(('0.0.0.0', port))
+    server_socket.listen(10)  # Allow up to 10 clients to queue up
+
+    print(f"Server listening on port {port}")
+
+    try:
+        while True:
+            client_socket, client_address = server_socket.accept()
+            client_handler = threading.Thread(target=handle_client, args=(client_socket, client_address))
+            client_handler.start()
+
+    except Exception as e:
+        print(f"Error in the main server loop: {e}")
+
+    finally:
+        server_socket.close()
+
+# Entry point
+if __name__ == "__main__":
+    main()
