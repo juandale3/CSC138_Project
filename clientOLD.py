@@ -1,80 +1,63 @@
 import socket
 import sys
 import threading
-import select
-from queue import Queue
 
-
-def send_request(sock, request):
-    sock.sendall(request.encode('utf-8'))
-
-
-def receive_response(sock, response_queue):
-    while True:
-        ready, _, _ = select.select([sock], [], [], 0.1)
-        if ready:
-            data = sock.recv(1024)
+def receive_messages(socket):
+    try:
+        while True:
+            data = socket.recv(1024)
             if not data:
                 break
-            response = data.decode('utf-8')
-            response_queue.put(response)
-
-
-def handle_user_input(sock):
-    while True:
-        # Check if there's input ready to be read from sys.stdin
-        if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
-            # Handle user input
-            user_input = input("Enter your message or type 'QUIT' to exit: ")
-            if user_input.upper() == "QUIT":
-                send_request(sock, "QUIT")
-                break
-            send_request(sock, user_input)
-
+            print(data.decode('utf-8'))
+    except Exception as e:
+        print(f"Error receiving messages: {e}")
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage: python client.py <hostname> <port>")
+        print("Usage: python3 client.py <hostname> <port>")
         sys.exit(1)
 
-    host = sys.argv[1]
+    hostname = sys.argv[1]
     port = int(sys.argv[2])
 
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.connect((host, port))
+        # Connect to the server
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((hostname, port))
 
-            response_queue = Queue()
+        # Loop until a valid JOIN command is provided
+        while True:
+            # Get user input for the username
+            username = input("Enter JOIN <username>: ")
 
-            # Issue JOIN request
-            join_command = input("Enter 'JOIN' followed by your username: ")
-            if join_command.upper().startswith("JOIN "):
-                send_request(s, join_command)
-                response = response_queue.get()
-                print(response)
-
-                if response != "Username already taken. Please choose another.":
-                    username = join_command.split()[1]
-
-                    # Receive response thread to constantly scan for msg/broadcast
-                    receive_thread = threading.Thread(target=receive_response, args=(s, response_queue))
-                    receive_thread.daemon = True
-                    receive_thread.start()
-
-                    # Input thread to constantly handle user input
-                    input_thread = threading.Thread(target=handle_user_input, args=(s,))
-                    input_thread.daemon = True
-                    input_thread.start()
-
-                    # Main loop for handling input and responses
-                    while True:
-                        pass
-
+            # Validate and send JOIN request with the chosen username
+            if username.startswith("JOIN "):
+                client_socket.sendall(username.encode('utf-8'))
+                break
             else:
-                print("Invalid command. Please enter 'JOIN' followed by your username (JOIN {username})")
+                print("Invalid format. Please start with JOIN <username>.")
+
+        # Start a separate thread to receive messages from the server
+        receive_thread = threading.Thread(target=receive_messages, args=(client_socket,))
+        receive_thread.start()
+
+        while True:
+            # Get user input for commands
+            command = input("Enter command (LIST, MESG <username> <message>, BCST <message>, QUIT): ")
+
+            if command == "QUIT":
+                client_socket.sendall(command.encode('utf-8'))
+                break
+
+            # Send the user command to the server
+            client_socket.sendall(command.encode('utf-8'))
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error in the main client loop: {e}")
+
+    finally:
+        print("Connection closed.")
+        client_socket.close()
 
 if __name__ == "__main__":
     main()

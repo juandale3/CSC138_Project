@@ -1,181 +1,108 @@
 import socket
-import sys
 import threading
-import queue  # Add this import statement
+import sys
 
 # Constants
 MAX_CLIENTS = 10
-REGISTERED_CLIENTS = set()
-lock = threading.Lock()
-client_data = {}
 
-
-def get_or_create_client(thread):
-    with lock:
-        if thread not in client_data:
-            client_data[thread] = ClientWrapper(None)
-        return client_data[thread]
-
-
-# Queue to hold messages for broadcasting
-broadcast_queue = queue.Queue()
-
-
-# Client wrapper to store separate usernames
-class ClientWrapper:
-    def __init__(self, socket, username=None):
-        self.socket = socket
-        self.request_username = username
-
-
-# Function to handle broadcasting in a separate thread
-def handle_broadcast():
-    while True:
-        message = broadcast_queue.get()
-        with lock:
-            sent_clients = set()
-
-            for thread, client in client_data.items():
-                if client.socket and client not in sent_clients:
-                    client.socket.sendall(message.encode('utf-8'))
-                    sent_clients.add(client)
-
-            broadcast_queue.task_done()
-
-
-# Start the broadcasting thread
-broadcast_thread = threading.Thread(target=handle_broadcast)
-broadcast_thread.start()
-
-
-# Function to send a message to all clients
-def send_message_to_all_clients(message):
-    broadcast_queue.put(message)
-
-
-# Function to send a message to a specific client
-def send_message_to_client(target_username, message, broadcast=False):
-    with lock:
-        for thread, client in client_data.items():
-            if client.request_username == target_username or broadcast:
-                if client.socket:
-                    client.socket.sendall(message.encode('utf-8'))
-
-
-# Function to handle a client in a separate thread
+# Database to store registered clients
+registered_clients = set()
+all_client_sockets = []
+# Function to handle a client
 def handle_client(client_socket, client_address):
-    try:
-        print(f"Connection from {client_address}")
+    username = None # Initialize username, different for each client instance
+    all_client_sockets.append(client_socket) # Adds client socket to array
+    while True: # Waits
+        data = client_socket.recv(1024).decode('utf-8')
 
-        current_thread = threading.current_thread()
-        client = ClientWrapper(client_socket)  # Create a new ClientWrapper for each thread
-        client_data[current_thread] = client
+        if not data:
+            break
 
-        while True:
-            data = client_socket.recv(1024)
-            if not data:
-                break
+        # Parse and handle the received command
+        command_parts = data.split()
+        command = command_parts[0]
 
-            request = data.decode('utf-8')
-            print(f"Received from {client_address}: {request}")
-
-            if request.startswith("JOIN"):
-                username_attempt = request.split()[1]
-                with lock:
-                    if username_attempt not in REGISTERED_CLIENTS:
-                        REGISTERED_CLIENTS.add(username_attempt)
-                        client.request_username = username_attempt
-                        response = "Joined successfully!"
-                    else:
-                        response = "Username already taken. Please choose another."
-
-            elif request == "LIST":
-                with lock:
-                    response = "\n".join(REGISTERED_CLIENTS)
-
-            elif request.startswith("MESG"):
-                try:
-                    sender_username = client.request_username
-                    parts = request.split()
-                    target_username = parts[1]
-                    if target_username in REGISTERED_CLIENTS:
-                        message = ' '.join(parts[2:])
-                        response = f"Message from {sender_username}: {message}"
-                        send_message_to_client(target_username, response, False)
-                        continue  # Skip broadcasting
-                    else:
-                        response = f"Unknown recipient: {target_username}"
-                except Exception as e:
-                    print(f"Unknown Format")
-
-
-            elif request.startswith("BCST"):
-                try:
-                    message = ' '.join(request.split()[1:])
-                    with lock:
-                        response = f"Broadcast from {client.request_username}: {message}"
-                        broadcast_queue.put(response)
-                except Exception as e:
-                    print(f"Unknown Format")
-
-
-            elif request == "QUIT":
-                with lock:
-                    response = "Goodbye!"
-                    break
-
+        if command == "JOIN": # JOIN command
+            if len(registered_clients) >= MAX_CLIENTS: # Checker in case of max users
+                client_socket.send("Too Many Users".encode('utf-8'))
+            elif username is None and len(command_parts) == 2 and command_parts[1].isalnum(): # Username is valid
+                username = command_parts[1]
+                print(f"{username} with a ip of {client_address} Joined the Chatroom")
+                for client in all_client_sockets:
+                    client.send(f"welcome {username} to the server".encode('utf-8'))
+                    print(f"{username} Joined the Chatroom")
+                registered_clients.add(username)
             else:
-                response = "Unknown message."
+                client_socket.send("Join Error".encode('utf-8')) # Username invalid
 
-            client_socket.sendall(response.encode('utf-8'))
+        elif command == "LIST": # LIST command
+            if username:
+                client_socket.send(",".join(registered_clients).encode('utf-8')) # Sends user list,
+                # taken from the registered_client set
+            else:
+                client_socket.send("Not Registered".encode('utf-8'))
 
-    except Exception as e:
-        print(f"Error handling client {client_address}: {e}")
+        elif command == "MESG": # MESG command
+            if username and len(command_parts) >= 3 and command_parts[1] in registered_clients:  # Checker to ensure
+                # formatting is correct and recipient exists
+                recipient = command_parts[1]
+                message = " ".join(command_parts[2:]) # Parses rest of message to
+                print(f"{username} to {recipient}: {message}")
+                # Implement logic to send the message to the recipient
+                num = 0
+                for i in registered_clients: # Iterates through registered clients to find correct user target
+                    if i == recipient:
+                        num = num + 1
+                for client in all_client_sockets: # Sends notification to every user
+                    if client == all_client_sockets[num-1]:
+                        client.send(f"{username} has send {recipient} a message: {message}".encode('utf-8'))
+            else:
+                client_socket.send("Unknown Recipient".encode('utf-8'))
 
+        elif command == "BCST":
+            if username and len(command_parts) >= 2: # Checker to ensure command is proper
+                message = " ".join(command_parts[1:])
+                print(f"{username} (Broadcast): {message}")
+                for client in all_client_sockets:
+                    client.send(f"{username} sent a broadcast message: {message}".encode('utf-8')) # sends the message
+                    # to all users
 
-    finally:
-        with lock:
-            if client.request_username in REGISTERED_CLIENTS:
-                REGISTERED_CLIENTS.remove(client.request_username)
-            del client_data[threading.current_thread()]  # Remove client data
+                # client_socket.sendall(f"{username} sent to all: {message}".encode('utf-8'))
+                # Implement logic to broadcast the message to all clients except the sender
+            else:
+                client_socket.send("Invalid BCST Request".encode('utf-8'))
 
-        print(f"Connection closed from {client_address}")
+        elif command == "QUIT": # breaks the loop for client on quit command
+            break
 
-        client_socket.close()
+        else:
+            client_socket.send("Unknown Message".encode('utf-8'))
 
+    # Cleanup when client disconnects
+    if username:
+        registered_clients.remove(username)
+        print(f"{username} Left the Chatroom")
+    client_socket.close()
 
-# Main server function
+# Main function to start the server
 def main():
-    global client_address
-    if len(sys.argv) != 2:
-        print("Usage: python3 server.py <port>")
+    if len(sys.argv) != 2: # Checker to make sure initial call is formatted correctly
+        print("Usage: python3 server.py <svr_port>")
         sys.exit(1)
+
+    host = '0.0.0.0'
     port = int(sys.argv[1])
 
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('0.0.0.0', port))
-    server_socket.listen(10)  # Allow up to 10 clients to queue up
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #TCP socket
+    server_socket.bind((host, port))
+    server_socket.listen()
 
-    print(f"Server listening on port {port}")
+    print("The Chat Server Started")
 
-    try:
-        while True:
-            client_socket, client_address = server_socket.accept()
+    while True: # Mutlithreaded client functionality
+        client_socket, client_address = server_socket.accept()
+        client_handler = threading.Thread(target=handle_client, args=(client_socket, client_address))
+        client_handler.start()
 
-            client = ClientWrapper(client_socket)
-            client_data[threading.Thread(target=handle_client, args=(client_socket, client_address))] = client
-
-            client_handler = threading.Thread(target=handle_client, args=(client_socket, client_address))
-            client_handler.start()
-
-    except Exception as e:
-        print(f"Error in the main server loop: {e}")
-
-    finally:
-        print(f"Connection closed from {client_address}")
-        server_socket.close()
-
-
-# Entry point
 if __name__ == "__main__":
     main()

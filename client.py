@@ -2,15 +2,16 @@ import socket
 import sys
 import threading
 
-def receive_messages(socket):
-    try:
-        while True:
-            data = socket.recv(1024)
-            if not data:
-                break
-            print(data.decode('utf-8'))
-    except Exception as e:
-        print(f"Error receiving messages: {e}")
+def receive_messages(sock): # Function to receive messages
+    while True:
+        try:
+            data = sock.recv(1024).decode('utf-8')
+            #if not data:
+             #   break
+            print(data)
+        except socket.error as e:
+            print(f"Error receiving message: {e}")
+            break
 
 def main():
     if len(sys.argv) != 3:
@@ -20,43 +21,43 @@ def main():
     hostname = sys.argv[1]
     port = int(sys.argv[2])
 
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP Connection to connect to appr. server
+    client_socket.connect((hostname, port))
+    print("Connected to the server.")
+    #JOIN request
     try:
-        # Connect to the server
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((hostname, port))
-
-        # Loop until a valid JOIN command is provided
         while True:
-            # Get user input for the username
-            username = input("Enter JOIN <username>: ")
-
-            # Validate and send JOIN request with the chosen username
-            if username.startswith("JOIN "):
-                client_socket.sendall(username.encode('utf-8'))
+            
+            username = input("Please enter JOIN folowed by your username: ") # JOIN command to set username
+            if username.upper().startswith("JOIN "):
+                client_socket.send(username.encode('utf-8'))
+                dat = client_socket.recv(1024).decode('utf-8')
+                print(dat)
                 break
             else:
-                print("Invalid format. Please start with JOIN <username>.")
-
-        # Start a separate thread to receive messages from the server
-        receive_thread = threading.Thread(target=receive_messages, args=(client_socket,))
-        receive_thread.start()
-
+                print("invalid response please enter again")
+        rec_thread = threading.Thread(target=receive_messages, args=(client_socket,)) # thread to constantly scan
+        # for messages
+        rec_thread.start()
         while True:
-            # Get user input for commands
-            command = input("Enter command (LIST, MESG <username> <message>, BCST <message>, QUIT): ")
-
+            #rec_thread.start()
+            inp = input("Please enter a argument: ") # argument parser
+            command, *args = inp.split()
+            # print("here are the arguments")
+            # print(command)
+            # print(args) #ERROR CHECKING FOR INPUTS
             if command == "QUIT":
-                client_socket.sendall(command.encode('utf-8'))
+                client_socket.send(command.encode('utf-8'))
                 break
+    
+            client_socket.send(inp.encode('utf-8'))
 
-            # Send the user command to the server
-            client_socket.sendall(command.encode('utf-8'))
-
+            #dat = client_socket.recv(1024).decode('utf-8')
+            
+            #print(dat)
     except Exception as e:
         print(f"Error in the main client loop: {e}")
-
     finally:
-        print("Connection closed.")
         client_socket.close()
 
 if __name__ == "__main__":
