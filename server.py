@@ -27,10 +27,18 @@ def handle_client(client_socket, client_address):
                 client_socket.send("Too Many Users".encode('utf-8'))
             elif username is None and len(command_parts) == 2 and command_parts[1].isalnum(): # Username is valid
                 username = command_parts[1]
-                print(f"{username} with a ip of {client_address} Joined the Chatroom")
-                for client in all_client_sockets:
-                    client.send(f"welcome {username} to the server".encode('utf-8'))
-                    print(f"{username} Joined the Chatroom")
+                print(f"Connected with {client_address} ")
+                #print(f"{username} Joined the Chatroom ")
+                
+                # after new client join, get the last element of client list
+                client = all_client_sockets[-1]
+                client.send(f"welcome {username} to the server".encode('utf-8'))
+                print(f"{username} Joined the Chatroom")
+                
+                #for client in all_client_sockets:
+                    #client.send(f"welcome {username} to the server".encode('utf-8'))
+                    #print(f"{username} Joined the Chatroom")
+                    
                 registered_clients.add(username)
             else:
                 client_socket.send("Join Error".encode('utf-8')) # Username invalid
